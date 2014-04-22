@@ -178,6 +178,7 @@ void get_tfidf_train(MatrixXd & mat_tfidf_train,
     // convert to idf, note that word_ind2idf[0] keeps 0, since:
     // 1) word_ind2idf[<unk>] is 0, yet cannot divide by 0;
     // 2) dot product with train will be 0 anyway, therefore zero out <unk> now
+    word_ind2idf[0] = 0;
     for (int w_i=1; w_i < W; w_i++)
     {
         word_ind2idf[w_i] = log10( D * 1.0 / word_ind2idf[w_i] );
@@ -198,8 +199,8 @@ void get_tfidf_train(MatrixXd & mat_tfidf_train,
             int w_i = documents[j]->word_ind[i];
             mat_tfidf_train(j, w_i) = ( documents[j]->word_count[i] / C_j ) * word_ind2idf[w_i]; 
         }
+        //cerr << "tfidf mat for train " << j << endl << mat_tfidf_train.row(j) << endl;
     }
-    //cerr << "tfidf mat for train " << endl << mat_tfidf_train << endl;
 }
 
 
