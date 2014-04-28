@@ -18,9 +18,6 @@ using namespace Eigen;
 using namespace TCLAP;
 
 
-//TODO: internally handle unknown test voc that is beyond 0 to W? i.e. when it is not converted to 0?
-
-
 // pair comparer copied from shaofeng mo
 bool pairCmpDescend( const pair<int,double>& p1, const pair<int,double>& p2){
   if( p1.second - p2.second > 0.00000000001 ){
@@ -55,6 +52,8 @@ Document* get_str2doc(string str)
     int w_i, w_c; 
     while (iss >> w_i >> w_c) 
     {
+        //NOTE: convert 1-based word and doc index to be internally 0-based
+        w_i -= 1;
         doc->word_ind.push_back(w_i);
         doc->word_count.push_back(w_c);
     }
@@ -70,7 +69,6 @@ Document* get_str2doc(string str)
 void read_vocab(string file, vector<string> & vocabs) 
 {
     clock_t t_b4_read = clock();
-    vocabs.push_back("<unk>");    
 
     ifstream ifs(file.c_str());
     for (string line ; getline(ifs, line); )
@@ -113,12 +111,15 @@ Document** read_docword(string file, int & D, int & W, int & C)
             int d_j, w_i, w_c;
             iss >> d_j >> w_i >> w_c;
             C += w_c;
+            //NOTE: convert 1-based word and doc index to be internally 0-based
             d_j -= 1;
+            w_i -= 1;
             //cerr << d_j << " " << w_i << " " << w_c << endl;
             documents[d_j]->word_ind.push_back(w_i);
             documents[d_j]->word_count.push_back(w_c);
         }
     }
+    cerr << "D:" << D << "\tW:" << W << "\tC:" << C << endl; 
     cerr << "done reading docword file, time spent: " << float(clock() - t_b4_read)/CLOCKS_PER_SEC << " secs" << endl << endl;
     return documents;
 }
@@ -145,7 +146,7 @@ void get_tfidf_test(MatrixXd & mat_tfidf_test,
         int w_i = document->word_ind[i];
         mat_tfidf_test(0, w_i) = ( document->word_count[i] / C_j )* word_ind2idf[w_i]; 
     }
-    //cerr << "tfidf mat for test" << endl << mat_tfidf_test.row(0) << endl;
+    cerr << "tfidf mat for test" << endl << mat_tfidf_test.row(0) << endl;
 }
 
 
@@ -161,7 +162,6 @@ void get_tfidf_train(MatrixXd & mat_tfidf_train,
     mat_tfidf_train = MatrixXd::Constant(D, W, 0);  
 
     //NOTE: having total vocab len W, further assume that
-    // word index is from 0 to W-1, with 0 for <unk>
     for (int w_i=0; w_i < W; w_i++)
     {
         word_ind2idf[w_i] = 0;
@@ -175,11 +175,8 @@ void get_tfidf_train(MatrixXd & mat_tfidf_train,
             word_ind2idf[w_i] += 1;
         }
     }
-    // convert to idf, note that word_ind2idf[0] keeps 0, since:
-    // 1) word_ind2idf[<unk>] is 0, yet cannot divide by 0;
-    // 2) dot product with train will be 0 anyway, therefore zero out <unk> now
-    word_ind2idf[0] = 0;
-    for (int w_i=1; w_i < W; w_i++)
+    // convert to idf
+    for (int w_i=0; w_i < W; w_i++)
     {
         word_ind2idf[w_i] = log10( D * 1.0 / word_ind2idf[w_i] );
     }
@@ -199,7 +196,7 @@ void get_tfidf_train(MatrixXd & mat_tfidf_train,
             int w_i = documents[j]->word_ind[i];
             mat_tfidf_train(j, w_i) = ( documents[j]->word_count[i] / C_j ) * word_ind2idf[w_i]; 
         }
-        //cerr << "tfidf mat for train " << j << endl << mat_tfidf_train.row(j) << endl;
+        cerr << "tfidf mat for train " << j << endl << mat_tfidf_train.row(j) << endl;
     }
 }
 
@@ -237,8 +234,11 @@ int main( int argc,      // Number of strings in array argv
         cmd.add( docwordInFileArg );
 
         //TODO: output vocab for better visualization and sanity check, optional
-        ValueArg<string> vocabInFileArg("v","vocabfile","Path to vocab file associated with docword file for training, in uci sparse bag-of-words format, note that word index 0 is internally reserved for unknown words <unk> potentially existing in test doc", false, "","string");
+        ValueArg<string> vocabInFileArg("v","vocabfile","Path to vocab file associated with docword file for training, in uci sparse bag-of-words format, 1-based", false, "","string");
         cmd.add( vocabInFileArg );
+
+        ValueArg<string> docwordTestInFileArg("t","docwordtestfile","Path to docword file for similarity testing, in uci sparse bag-of-words format. Output similarity prediction for each file to STDOUT. Note that test file can also be piped from STDIN in a compact oneline format, yet this arg switch is preferred to STDIN when there are empty lines", false, "","string");
+        cmd.add( docwordTestInFileArg );
 
         ValueArg<int> similarSizeArg("","similarsize","for similarity test, how many top similar docs to report", false, 50,"int");
         cmd.add( similarSizeArg );
@@ -250,6 +250,7 @@ int main( int argc,      // Number of strings in array argv
 
         // Get the value parsed by each arg. 
         const string f_docword = docwordInFileArg.getValue();
+        const string f_docword_test = docwordTestInFileArg.getValue();
         const string f_vocab = vocabInFileArg.getValue();
         const int SIMILAR_SIZE = similarSizeArg.getValue();
 
@@ -257,8 +258,9 @@ int main( int argc,      // Number of strings in array argv
 
         // report parameters
         cerr << "\nParameters:\n";
-        cerr << "Input docword file: " << f_docword << endl;
-        cerr << "Input vocab file: " << f_vocab << endl;
+        cerr << "Input train docword file: " << f_docword << endl;
+        cerr << "Input train vocab file: " << f_vocab << endl;
+        cerr << "Input test docword file: " << f_docword_test << endl;
         cerr << "SIMILAR_SIZE: " << SIMILAR_SIZE << endl;
         cerr << endl;
 
@@ -275,11 +277,6 @@ int main( int argc,      // Number of strings in array argv
         Document** documents = read_docword(f_docword, D, W, C);
         //TODO: assert to check size consistency of docword file and vocab file
         //assert (vocabs.size()==W);
- 
-        //NOTE: different from uci bag-of-words sparse format, word index w_i is internally 0-based
-        // 0 is reserved for unknown words <unk> potentially existing in test doc, therefore W+1
-        W += 1; 
-        cerr << "D:" << D << "\tW:" << W << "(adding word index 0 for unknown word type <unk>)\tC:" << C << endl; 
   
         // report empty doc to stdout, convert internal 0-based doc ind to 1-based
         int empty_doc_count = 0;
