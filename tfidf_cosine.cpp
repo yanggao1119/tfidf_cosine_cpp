@@ -146,7 +146,7 @@ void get_tfidf_test(MatrixXd & mat_tfidf_test,
         int w_i = document->word_ind[i];
         mat_tfidf_test(0, w_i) = ( document->word_count[i] / C_j )* word_ind2idf[w_i]; 
     }
-    cerr << "tfidf mat for test" << endl << mat_tfidf_test.row(0) << endl;
+    //cerr << "tfidf mat for test" << endl << mat_tfidf_test.row(0) << endl;
 }
 
 
@@ -196,7 +196,7 @@ void get_tfidf_train(MatrixXd & mat_tfidf_train,
             int w_i = documents[j]->word_ind[i];
             mat_tfidf_train(j, w_i) = ( documents[j]->word_count[i] / C_j ) * word_ind2idf[w_i]; 
         }
-        cerr << "tfidf mat for train " << j << endl << mat_tfidf_train.row(j) << endl;
+        //cerr << "tfidf mat for train " << j << endl << mat_tfidf_train.row(j) << endl;
     }
 }
 
@@ -210,9 +210,19 @@ void get_similar_by_cosine_similarity(vector< pair<int, double> > & pair_docind_
 {
     // given testdoc, rank training doc by cosine similarity: higher cosine similarity, higher rank
     double norm_testvec = mat_tfidf_test.row(0).norm();
+
+    //TODO: how to handle empty doc properly?
+    // empty doc, to avoid dividing by 0
+    norm_testvec = (norm_testvec == 0.0 ? 1.0 : norm_testvec);
+
     for (int j=0; j<D; j++)
     {
-        double dist = mat_tfidf_train.row(j).dot( mat_tfidf_test.row(0) ) / norm_testvec / mat_tfidf_train.row(j).norm();
+        
+        double norm_trainvec = mat_tfidf_train.row(j).norm();
+        // empty doc, to avoid dividing by 0
+        norm_trainvec = (norm_trainvec == 0.0 ? 1.0 : norm_trainvec);
+
+        double dist = mat_tfidf_train.row(j).dot( mat_tfidf_test.row(0) ) / norm_testvec / norm_trainvec;
         pair_docind_score.push_back( pair<int, double> (j, dist) );
     }
 
@@ -243,9 +253,6 @@ int main( int argc,      // Number of strings in array argv
         ValueArg<int> similarSizeArg("","similarsize","for similarity test, how many top similar docs to report", false, 50,"int");
         cmd.add( similarSizeArg );
 
-        //SwitchArg predictSimilarSwitch("p","predict","optional prediction mode, i.e., after training, it accepts a one-line compact docword representation from STDIN and outputs to STDOUT the id of the most similar document (1-based) from the training set", false);
-        //cmd.add( predictSimilarSwitch );
-
         cmd.parse( argc, argv );
 
         // Get the value parsed by each arg. 
@@ -253,8 +260,6 @@ int main( int argc,      // Number of strings in array argv
         const string f_docword_test = docwordTestInFileArg.getValue();
         const string f_vocab = vocabInFileArg.getValue();
         const int SIMILAR_SIZE = similarSizeArg.getValue();
-
-        //const bool predictSimilar = predictSimilarSwitch.getValue();
 
         // report parameters
         cerr << "\nParameters:\n";
@@ -297,17 +302,52 @@ int main( int argc,      // Number of strings in array argv
         MatrixXd mat_tfidf_train;
         get_tfidf_train(mat_tfidf_train, documents, word_ind2idf, D, W);
 
-        // similarity testing based on cosine similarity, input from STDIN, output to STDOUT
-        //if (predictSimilar)
-        if (true)
+        // mode 1: similarity testing for file from arg switch, output to STDOUT
+        // convert internal 0-based doc ind to 1-based
+        if (f_docword_test != "")
+        {
+            cerr << "Start similarity prediction for test corpus: " << f_docword_test << endl;
+
+            int D_test=0, W_test=0, C_test=0;
+            Document** documents_test = read_docword(f_docword_test, D_test, W_test, C_test); 
+
+            for (int tj=0; tj<D_test; tj++)
+            {
+                Document * testdoc = documents_test[tj];
+                clock_t t_b4_test = clock();
+
+                MatrixXd mat_tfidf_test;
+                get_tfidf_test(mat_tfidf_test, testdoc, word_ind2idf, W);
+
+                // get paired (doc_ind, score) vector with similarity measure
+                vector< pair<int, double> > pair_docind_score;
+                get_similar_by_cosine_similarity(pair_docind_score, mat_tfidf_train, mat_tfidf_test, D, W);
+
+                // output to STDOUT in one line
+                int numTopSimilar = (pair_docind_score.size() < SIMILAR_SIZE ? pair_docind_score.size() : SIMILAR_SIZE);
+                for (int p=0; p<numTopSimilar; p++)
+                {
+                    cout << pair_docind_score[p].first+1 << ":" << pair_docind_score[p].second;
+                    if (p < numTopSimilar-1) cout << " ";
+                }
+                cout << endl;
+                cerr << "testdoc: " << tj+1 << " time spent: " << float(clock() - t_b4_test)/CLOCKS_PER_SEC << " secs" << endl; 
+            }
+        }
+
+        // mode 2: similarity testing for file from STDIN, output to STDOUT, note: cannot handle blank lines!
+        // convert internal 0-based doc ind to 1-based
+        else
         {
             cerr << "\nReading input from STDIN" << endl;
+            long counter = 0;
             while (cin) 
             {
                 string testdoc_line;
                 getline(cin, testdoc_line);
                 if (!cin.eof())
                 {
+                    counter ++;
                     clock_t t_b4_test = clock();
                     Document * testdoc = get_str2doc(testdoc_line);
                     MatrixXd mat_tfidf_test;
@@ -325,8 +365,7 @@ int main( int argc,      // Number of strings in array argv
                         if (p < numTopSimilar-1) cout << " ";
                     }
                     cout << endl;
-                    cerr << "time spent: " << float(clock() - t_b4_test)/CLOCKS_PER_SEC << " secs" << endl; 
-                    cout << endl;
+                    cerr << "testdoc: " << counter << " time spent: " << float(clock() - t_b4_test)/CLOCKS_PER_SEC << " secs" << endl; 
                 }
             }
         }
